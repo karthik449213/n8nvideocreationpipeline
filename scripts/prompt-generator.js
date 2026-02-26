@@ -7,27 +7,71 @@ import OpenAI from 'openai';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 async function createPrompts(idea) {
-  const prompt = `You are an expert prompt engineer. Given the video concept: "${idea}", generate:
-1. A list of 5 descriptive image prompts, each designed to produce a 3D-rendered cinematic still, with lighting, camera angle, and atmosphere.
-2. A single concise video prompt that could be fed to an animation system or used as inspiration for transitions.
+  const systemPrompt = `You are an expert prompt engineer specializing in 3D animation and cinematic visuals.
+Your job is to create detailed, descriptive prompts for image generation software.
+Every prompt should be specific about:
+- Camera angle and perspective
+- Lighting quality and mood
+- 3D render style and quality
+- Atmosphere and composition
+Return ONLY valid JSON. No markdown formatting, no backticks, no extra text.`;
 
-Return JSON with keys \"images\" (array of strings) and \"video\" (string).`;
+  const userPrompt = `For this video concept: "${idea}"
 
-  const response = await client.responses.create({
+Generate two things:
+
+1. An array called "images" with exactly 5 detailed image prompts. Each prompt should describe a specific camera shot/scene in cinematic detail, including:
+   - What is shown (subject, environment, objects)
+   - Camera angle (wide, closeup, overhead, etc.)
+   - Lighting (moody, bright, shadows, color palette)
+   - Style (photorealistic, 3D rendered, cinematic)
+   - Mood and atmosphere
+
+2. A string called "video" with a single comprehensive prompt that could guide the overall video editing, transitions, and motion graphics.
+
+Return ONLY this JSON format:
+{
+  "images": ["prompt 1", "prompt 2", "prompt 3", "prompt 4", "prompt 5"],
+  "video": "overall video direction and transitions"
+}
+
+No markdown, no extra text, just the JSON object.`;
+
+  const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
-    input: prompt,
-    max_output_tokens: 800
+    messages: [
+      {
+        role: 'system',
+        content: systemPrompt
+      },
+      {
+        role: 'user',
+        content: userPrompt
+      }
+    ],
+    max_tokens: 1000,
+    temperature: 0.7
   });
 
-  const text = response.output_text || '';
+  const text = response.choices[0]?.message?.content || '';
+  let data;
   try {
-    const data = JSON.parse(text);
-    console.log(JSON.stringify(data, null, 2));
-    return data;
-  } catch (e) {
-    console.error('Failed to parse JSON from GPT:', text);
-    throw e;
+    data = JSON.parse(text);
+  } catch (parseError) {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON found in response');
+    data = JSON.parse(jsonMatch[0]);
   }
+  
+  if (!data.images || !Array.isArray(data.images) || data.images.length === 0) {
+    throw new Error('Response missing valid "images" array');
+  }
+  if (!data.video || typeof data.video !== 'string') {
+    throw new Error('Response missing valid "video" string');
+  }
+  
+  console.log(JSON.stringify(data, null, 2));
+  return data;
 }
 
 if (require.main === module) {

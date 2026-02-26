@@ -7,17 +7,46 @@ import OpenAI from 'openai';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 async function generateIdeas() {
-  const prompt = `You are a creative writer specializing in short, 3D-style YouTube films in the spirit of Zack D. Films. Provide 10 unique video concepts, each no more than one sentence.`;
+  const systemPrompt = `You are a creative writer specializing in short, 3D-style YouTube films in the spirit of Zack D. Films. 
+Your videos are mysterious, cinematic, and visually stunning with deep storytelling. 
+Each concept should be unique, engaging, and suitable for visual effects and animation.`;
 
-  const response = await client.responses.create({
+  const userPrompt = `Generate exactly 10 unique video concepts for a 3D-style short film. 
+Each concept should be:
+- One sentence only
+- Mysterious and intriguing
+- Visually cinematic
+- Suitable for 3D animation/effects
+
+Format as a JSON array with exactly 10 strings. No markdown, no explanation, just the JSON array.`;
+
+  const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
-    input: prompt,
-    max_output_tokens: 500
+    messages: [
+      {
+        role: 'system',
+        content: systemPrompt
+      },
+      {
+        role: 'user',
+        content: userPrompt
+      }
+    ],
+    max_tokens: 500,
+    temperature: 0.7
   });
 
-  // simple parse: split by newline
-  const text = response.output_text || '';
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  // Extract and parse JSON response
+  const text = response.choices[0]?.message?.content || '';
+  let lines;
+  try {
+    lines = JSON.parse(text);
+    if (!Array.isArray(lines)) throw new Error('Response is not an array');
+  } catch (e) {
+    const jsonMatch = text.match(/\[\s*[\s\S]*\]/);
+    if (!jsonMatch) throw new Error('Could not extract JSON from response: ' + text);
+    lines = JSON.parse(jsonMatch[0]);
+  }
   console.log(JSON.stringify(lines, null, 2));
   return lines;
 }

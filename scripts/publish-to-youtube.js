@@ -5,51 +5,152 @@ dotenv.config();
 import fs from 'fs';
 import { google } from 'googleapis';
 import OpenAI from 'openai';
+import path from 'path';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 async function generateMetadata(idea) {
-  const prompt = `Create a compelling YouTube title, description, and 10 tags for a short video about "${idea}" in the style of Zack D. Films.`;
-  const resp = await client.responses.create({
+  const systemPrompt = `You are a YouTube content expert and SEO specialist for short-form cinematic videos.
+Your job is to create compelling metadata that will help videos rank and get discovered.
+Return ONLY valid JSON. No markdown, no extra text.`;
+
+  const userPrompt = `For a 3D-style short film about: "${idea}"
+
+Generate YouTube metadata in JSON format:
+{
+  "title": "A compelling title (under 100 chars)",
+  "description": "A 2-3 sentence engaging description",
+  "tags": ["tag1", "tag2", ..., "tag10"]
+}
+
+Requirements for title:
+- Catchy and intriguing
+- Under 100 characters
+- Include relevant keywords
+
+Requirements for description:
+- 2-3 sentences
+- Engaging and descriptive
+- Include relevant keywords and hashtags
+
+Requirements for tags:
+- Exactly 10 tags
+- Mix of broad (3D animation, short film) and specific tags
+- Include "shortfilm", "3d", "animation"
+
+Return ONLY the JSON object with no markdown or extra text.`;
+
+  const resp = await client.chat.completions.create({
     model: 'gpt-4o-mini',
-    input: prompt,
-    max_output_tokens: 300
+    messages: [
+      {
+        role: 'system',
+        content: systemPrompt
+      },
+      {
+        role: 'user',
+        content: userPrompt
+      }
+    ],
+    max_tokens: 400,
+    temperature: 0.7
   });
-  const text = resp.output_text || '';
+  
+  const text = resp.choices[0]?.message?.content || '';
+  let metadata;
   try {
-    return JSON.parse(text);
-  } catch (e) {
-    console.error('metadata parse failed:', text);
-    throw e;
+    metadata = JSON.parse(text);
+  } catch (parseError) {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON found in metadata response');
+    metadata = JSON.parse(jsonMatch[0]);
   }
+
+  if (!metadata.title || !metadata.description || !metadata.tags || !Array.isArray(metadata.tags)) {
+    throw new Error('Invalid metadata structure');
+  }
+  
+  return metadata;
 }
 
 async function upload(videoPath, idea) {
-  // authenticate via GOOGLE_APPLICATION_CREDENTIALS environment variable
-  const auth = new google.auth.GoogleAuth({ scopes: ['https://www.googleapis.com/auth/youtube.upload'] });
-  const youtube = google.youtube({ version: 'v3', auth });
-
-  const metadata = await generateMetadata(idea);
-
-  const res = await youtube.videos.insert({
-    part: ['snippet', 'status'],
-    requestBody: {
-      snippet: {
-        title: metadata.title,
-        description: metadata.description,
-        tags: metadata.tags || []
-      },
-      status: {
-        privacyStatus: 'public'
-      }
-    },
-    media: {
-      body: fs.createReadStream(videoPath)
+  try {
+    if (!fs.existsSync(videoPath)) {
+      throw new Error(`Video file not found: ${videoPath}`);
     }
-  });
 
-  console.log('Uploaded video id', res.data.id);
-  return res.data;
+    const stats = fs.statSync(videoPath);
+    if (stats.size === 0) {
+      throw new Error(`Video file is empty: ${videoPath}`);
+    }
+
+    console.error(`Uploading video: ${videoPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+
+    if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      throw new Error('GOOGLE_APPLICATION_CREDENTIALS environment variable not set');
+    }
+
+    if (!fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+      throw new Error(`Service account file not found: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
+    }
+
+    const auth = new google.auth.GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/youtube.upload'],
+      keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS
+    });
+
+    const youtube = google.youtube({
+      version: 'v3',
+      auth: await auth.getClient()
+    });
+
+    console.error('Generating metadata from GPT...');
+    const metadata = await generateMetadata(idea);
+
+    console.error('Starting YouTube upload...');
+    const res = await youtube.videos.insert({
+      part: ['snippet', 'status'],
+      requestBody: {
+        snippet: {
+          title: metadata.title,
+          description: metadata.description,
+          tags: metadata.tags || [],
+          categoryId: '24'
+        },
+        status: {
+          privacyStatus: 'public',
+          madeForKids: false
+        }
+      },
+      media: {
+        body: fs.createReadStream(videoPath)
+      }
+    }, {
+      maxRedirects: 0,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
+    });
+
+    const uploadedVideoId = res.data.id;
+    console.log(JSON.stringify({
+      videoId: uploadedVideoId,
+      title: metadata.title,
+      description: metadata.description,
+      url: `https://www.youtube.com/watch?v=${uploadedVideoId}`
+    }, null, 2));
+
+    return {
+      videoId: uploadedVideoId,
+      metadata: metadata
+    };
+
+  } catch (error) {
+    console.error('Upload error:', error.message);
+    if (error.response && error.response.data) {
+      console.error('YouTube error:', error.response.data);
+    }
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {

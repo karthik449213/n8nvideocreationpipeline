@@ -2,10 +2,13 @@
   "name": "video-creation-pipeline",
   "version": "1.0.0",
   "description": "Automated pipeline for generating 3D-style short videos",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "idea": "node scripts/idea-generator.js",
     "prompts": "node scripts/prompt-generator.js",
+    "images": "node scripts/image-generator.js",
+    "audio": "node scripts/audio-generator.js",
     "assemble": "node scripts/video-assembler.js",
     "publish": "node scripts/publish-to-youtube.js"
   },
